@@ -96,6 +96,7 @@ export const useMediaStore = defineStore('media', {
       item.favorite = next ? 1 : 0; // 楽観更新
       try {
         await api.setFavorite(item.id, next);
+        void useMetaStore().refreshStats();
       } catch {
         item.favorite = next ? 0 : 1; // ロールバック
       }

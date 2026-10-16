@@ -7,6 +7,7 @@ import { parseSubject } from '../src/adapters/fivech/subject.js';
 import { parseDat, bodyToPlainText } from '../src/adapters/fivech/dat.js';
 import { extractMediaFromPost } from '../src/adapters/fivech/media.js';
 import { calcIkioi, buzzScore } from '../src/score.js';
+import { fiveChAdapter } from '../src/adapters/fivech/index.js';
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 
@@ -54,6 +55,11 @@ describe('parseSubject (実データ)', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]!.threadKey).toBe('1792144754');
   });
+
+  it('タイトルのHTMLエンティティをデコードする', () => {
+    const entries = parseSubject('1792144754.dat<>A&amp;B&lt;test&gt; (11)');
+    expect(entries[0]!.title).toBe('A&B<test>');
+  });
 });
 
 describe('parseDat (実データ)', () => {
@@ -69,6 +75,13 @@ describe('parseDat (実データ)', () => {
   it('bodyToPlainText: br→改行、タグ除去、エンティティデコード', () => {
     expect(bodyToPlainText('a<br>b&lt;c&amp;d')).toBe('a\nb<c&d');
     expect(bodyToPlainText('<a href="https://x.com">link</a>')).toBe('link');
+  });
+
+  it('壊れた行があってもレス番号がずれない', () => {
+    const posts = parseDat('name<>mail<>date<>本文1<>\nbroken_line\nname<>mail<>date<>本文3<>\n');
+    expect(posts).toHaveLength(2);
+    expect(posts[0]!.resNo).toBe(1);
+    expect(posts[1]!.resNo).toBe(3); // 2行目は壊れているが番号は消費される
   });
 });
 
@@ -134,6 +147,23 @@ describe('extractMediaFromPost', () => {
   it('URL末尾の句読点・括弧を取り除く', () => {
     const m = extractMediaFromPost(post('見て https://i.imgur.com/x.png。あと(https://i.imgur.com/y.jpg)'));
     expect(m.map((x) => x.url)).toEqual(['https://i.imgur.com/x.png', 'https://i.imgur.com/y.jpg']);
+  });
+
+  it('生HTML中の &amp; を含むURLを正しく抽出する', () => {
+    const m = extractMediaFromPost(post('https://example.com/img.png?a=1&amp;b=2'));
+    expect(m[0]!.url).toBe('https://example.com/img.png?a=1&b=2');
+  });
+});
+
+describe('FiveChAdapter.threadUrl (URL二重板キー回帰)', () => {
+  it('正しいread.cgi URLを生成する', () => {
+    const url = fiveChAdapter.threadUrl({
+      board: { server: 'mi', boardKey: 'news4vip', name: 'VIP', category: 'ネタ雑談', url: 'https://mi.5ch.io/news4vip/' },
+      threadKey: '1792144754',
+      title: 'test',
+      resCount: 1,
+    });
+    expect(url).toBe('https://mi.5ch.io/test/read.cgi/news4vip/1792144754/');
   });
 });
 

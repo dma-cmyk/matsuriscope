@@ -7,6 +7,10 @@
 
 ![concept](docs/concept-board.png)
 
+| デスクトップ | モバイル |
+|---|---|
+| ![desktop](docs/screenshot-desktop.png) | ![mobile](docs/screenshot-mobile.png) |
+
 ## 主な機能
 
 - 5ch人気スレッドの自動巡回・メディアURL抽出（30分間隔・手動収集ボタンあり）
@@ -140,6 +144,22 @@ matsuriscope/
 | POST | `/api/collect` | 手動収集トリガー |
 | GET | `/api/jobs` | 収集ログ |
 | GET/PUT | `/api/config` | 設定参照・更新 |
+
+## 動作確認結果（2026-10-16 実測）
+
+| 項目 | 結果 |
+|---|---|
+| 実データ収集 | 967板チェック → 60スレッド取得 → 213メディア保存（画像143/GIF1/動画69） |
+| 重複排除 | 2回目収集で223件中198件を既存として正しく排除（新規25件のみ） |
+| 多重起動防止 | 並行POSTで 409 `already running` |
+| APIバリデーション | invalid id → 400、存在しない id → 404 |
+| 非表示管理 | hide で一覧から即除外、復帰可能 |
+| 検索 | キーワード「中国」→ API 21件 = 画面表示21件（一致） |
+| 無限スクロール | 30 → 90カードへ自動追加ロード確認 |
+| 元スレッドリンク | `https://{server}.5ch.io/test/read.cgi/{board}/{key}/` 形式、HTTP 200 確認 |
+| テスト | Vitest 23本 全通過（実データフィクスチャ使用） |
+| ビルド | `pnpm build` 成功、`node dist/index.js` で本番起動 |
+| PC/スマホ表示 | `docs/screenshot-desktop.png` / `docs/screenshot-mobile.png` |
 
 ## 既知の制限事項
 
