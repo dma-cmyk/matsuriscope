@@ -32,7 +32,30 @@ export class FiveChAdapter implements SourceAdapter {
   /** 収集対象の板のみ返す (デフォルト除外カテゴリはアダプタ内で除去) */
   async listBoards(): Promise<SourceBoard[]> {
     const json = await fetchText(BBSMENU_URL, { maxBytes: 4 * 1024 * 1024 });
-    return parseBbsMenu(json).filter((b) => DEFAULT_EXCLUDED_CATEGORIES[b.category] !== true);
+    return parseBbsMenu(json).filter((b) => this.isBoardEligible(b));
+  }
+
+  isBoardEligible(board: SourceBoard): boolean {
+    if (DEFAULT_EXCLUDED_CATEGORIES[board.category] === true) return false;
+    if (!/^[a-z0-9-]+$/.test(board.server) || !/^[a-zA-Z0-9_]+$/.test(board.boardKey)) return false;
+    return (
+      board.url === `https://${board.server}.5ch.io/${board.boardKey}/` ||
+      board.url === `https://${board.server}.5ch.net/${board.boardKey}/`
+    );
+  }
+
+  /** 完全な現行subjectスナップショット。過去ログやheadlineは取得しない。 */
+  async listBoardThreads(board: SourceBoard): Promise<SourceThreadRef[]> {
+    if (!this.isBoardEligible(board)) throw new Error('board is not eligible for fivech collection');
+    const text = await fetchText(`${board.url}subject.txt`, {
+      maxBytes: config.collect.maxSubjectBytes,
+      encoding: 'cp932',
+    });
+    const refs = new Map<string, SourceThreadRef>();
+    for (const entry of parseSubject(text)) {
+      if (!refs.has(entry.threadKey)) refs.set(entry.threadKey, { board, ...entry });
+    }
+    return [...refs.values()];
   }
 
   /**

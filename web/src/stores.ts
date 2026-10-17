@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia';
 import { api, type Board, type MediaItem, type Stats } from './api';
 
-export type TypeFilter = 'all' | 'image' | 'video' | 'gif' | 'favorite';
+export type TypeFilter = 'all' | 'image' | 'video' | 'gif' | 'twitter' | 'favorite';
 export type SortKey = 'ikioi' | 'new' | 'res' | 'buzz';
 export type PeriodKey = '' | '24h' | '3d' | '7d';
 
@@ -55,6 +55,7 @@ export const useMediaStore = defineStore('media', {
       // 世代番号: 絞り込み連打で遅れて返った古い応答を破棄する
       const seq = ++this.requestSeq;
       this.loading = true;
+      this.loadingMore = false; // 失効したページ取得の完了を待たず、新しい一覧のページ取得を許可する
       this.error = null;
       try {
         const res = await api.media({ ...this.query(), page: 1, limit: this.limit });
@@ -104,24 +105,40 @@ export const useMediaStore = defineStore('media', {
   },
 });
 
+// Share concurrent status reads from polling and user actions so old responses cannot overwrite newer state.
+let statsRequest: Promise<Stats> | null = null;
+
 interface AppMetaState {
   stats: Stats | null;
+  statsError: string | null;
   boards: Board[];
   collecting: boolean;
 }
 
 export const useMetaStore = defineStore('meta', {
-  state: (): AppMetaState => ({ stats: null, boards: [], collecting: false }),
+  state: (): AppMetaState => ({ stats: null, statsError: null, boards: [], collecting: false }),
   actions: {
     async refreshStats() {
-      this.stats = await api.stats();
+      const request = statsRequest ??= api.stats();
+      try {
+        this.stats = await request;
+        this.statsError = null;
+      } catch (error) {
+        this.statsError = `収集状況を確認できませんでした。${(error as Error).message}`;
+        throw error;
+      } finally {
+        if (statsRequest === request) statsRequest = null;
+      }
     },
     async refreshBoards() {
       this.boards = (await api.boards()).items;
     },
     async triggerCollect() {
+      if (this.collecting) return;
       this.collecting = true;
       try {
+        await this.refreshStats();
+        if (this.stats?.jobRunning) return;
         await api.collect();
       } finally {
         this.collecting = false;

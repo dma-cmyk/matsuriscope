@@ -35,7 +35,7 @@ const relativeTime = computed(() => {
 </script>
 
 <template>
-  <v-card class="media-card" color="surface" flat @click="emit('open', item)">
+  <v-card class="media-card" color="surface" flat data-tour="media-card" :data-media-id="item.id" @click="emit('open', item)">
     <div class="thumb-wrap">
       <v-img
         v-if="thumbUrl"
@@ -50,8 +50,9 @@ const relativeTime = computed(() => {
           <div class="thumb-placeholder"><v-icon icon="mdi-loading" class="spin" /></div>
         </template>
       </v-img>
-      <div v-else class="thumb-fallback d-flex align-center justify-center">
+      <div v-else class="thumb-fallback d-flex flex-column align-center justify-center">
         <v-icon :icon="badge.icon" size="40" color="medium-emphasis" />
+        <span v-if="item.type === 'twitter'" class="text-caption text-medium-emphasis mt-2">詳細で画像・動画をプレビュー</span>
       </div>
       <v-chip class="type-badge" size="x-small" :style="{ background: badge.color }" label>
         <v-icon start :icon="badge.icon" size="12" />{{ badge.label }}
@@ -73,6 +74,7 @@ const relativeTime = computed(() => {
           size="x-small"
           variant="text"
           :color="item.favorite === 1 ? 'warning' : 'medium-emphasis'"
+          :aria-label="item.favorite === 1 ? 'お気に入りを解除' : 'お気に入りに登録'"
           @click.stop="media.toggleFavorite(item)"
         >
           <v-icon :icon="item.favorite === 1 ? 'mdi-star' : 'mdi-star-outline'" />

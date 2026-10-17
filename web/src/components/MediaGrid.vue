@@ -2,12 +2,44 @@
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useMediaStore } from '../stores';
 import type { MediaItem } from '../api';
+import { useTutorialStore } from '../tutorial';
 import MediaCard from './MediaCard.vue';
 import MediaDetailDialog from './MediaDetailDialog.vue';
 
 const media = useMediaStore();
+const tutorial = useTutorialStore();
 const detailId = ref<number | null>(null);
 const sentinel = ref<HTMLElement | null>(null);
+let tourOpenedDetail = false;
+
+watch(detailId, (id) => {
+  if (id !== null) tutorial.detailOpening(id);
+});
+
+function closeDetail() {
+  detailId.value = null;
+  tourOpenedDetail = false;
+  tutorial.detailClosed();
+}
+
+watch(
+  [() => tutorial.requestedDetailId, () => tutorial.running, () => tutorial.stepId],
+  ([id, running, step], [, wasRunning]) => {
+    if (!running) {
+      if (wasRunning && tourOpenedDetail) closeDetail();
+      return;
+    }
+    if (!['detail', 'source', 'favorite'].includes(step)) {
+      if (detailId.value !== null) closeDetail();
+      return;
+    }
+    if (id !== null && detailId.value !== id) {
+      detailId.value = id;
+      tourOpenedDetail = true;
+    }
+  },
+  { immediate: true },
+);
 
 let observer: IntersectionObserver | null = null;
 onMounted(() => {
@@ -27,6 +59,7 @@ watch(sentinel, (el, old) => {
 });
 
 function openDetail(item: MediaItem) {
+  tourOpenedDetail = tutorial.running;
   detailId.value = item.id;
 }
 
@@ -80,7 +113,7 @@ function onFavoriteChanged(id: number, favorite: boolean) {
     <MediaDetailDialog
       v-if="detailId !== null"
       :media-id="detailId"
-      @close="detailId = null"
+      @close="closeDetail"
       @navigate="navigate"
       @favorite-changed="onFavoriteChanged"
     />

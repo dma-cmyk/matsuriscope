@@ -13,15 +13,7 @@ export interface Stats {
   lastCollectAt: string | null;
   jobRunning: boolean;
   collectIntervalMinutes: number;
-  lastJob: {
-    id: number;
-    status: string;
-    started_at: number;
-    finished_at: number | null;
-    media_new: number;
-    errors: number;
-    message: string | null;
-  } | null;
+  lastJob: CollectionJob | null;
 }
 
 export interface Board {
@@ -31,6 +23,37 @@ export interface Board {
   name: string;
   category: string;
   enabled: number;
+}
+
+export type CollectStatus = 'running' | 'success' | 'partial' | 'error' | 'cancelled' | 'interrupted';
+
+export interface CollectionJob {
+  id: number;
+  scope: 'hot' | 'board';
+  trigger_type: 'schedule' | 'manual' | 'startup';
+  board_id: number | null;
+  board_name: string | null;
+  board_key: string | null;
+  status: CollectStatus;
+  threads_total: number;
+  threads_attempted: number;
+  threads_fetched: number;
+  media_found: number;
+  media_new: number;
+  errors: number;
+  cancel_requested: number;
+  current_thread: string | null;
+  started_at: number;
+  finished_at: number | null;
+  message: string | null;
+}
+
+export interface JobEvent {
+  id: number;
+  job_id: number;
+  ts: number;
+  level: 'info' | 'warn' | 'error';
+  message: string;
 }
 
 export type MediaType = 'image' | 'gif' | 'video' | 'youtube' | 'twitter' | 'other';
@@ -66,6 +89,7 @@ export interface MediaDetail {
     id: number;
     type: MediaType;
     url: string;
+    url_canonical: string;
     thumbnail_url: string | null;
     previewable: number;
     favorite: number;
@@ -94,6 +118,12 @@ export interface MediaQueryParams {
   limit?: number;
 }
 
+export class ApiError extends Error {
+  constructor(readonly status: number, detail: string) {
+    super(`API ${status}: ${detail}`);
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -101,7 +131,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.text();
-    throw new Error(`API ${res.status}: ${body.slice(0, 200)}`);
+    throw new ApiError(res.status, body.slice(0, 200));
   }
   return (await res.json()) as T;
 }
@@ -109,6 +139,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   stats: () => request<Stats>('/api/stats'),
   boards: () => request<{ items: Board[] }>('/api/boards'),
+  refreshBoards: () => request<{ items: Board[] }>('/api/boards/refresh', { method: 'POST' }),
+  jobs: (limit = 10) => request<{ jobs: CollectionJob[]; events: JobEvent[] }>(`/api/jobs?limit=${limit}`),
+  job: (id: number) => request<{ job: CollectionJob; events: JobEvent[] }>(`/api/jobs/${id}`),
+  collectBoard: (boardId: number) => request<{ started: boolean; jobId: number }>('/api/collect/board', {
+    method: 'POST',
+    body: JSON.stringify({ boardId }),
+  }),
+  cancelJob: (id: number) => request<{ cancelRequested: boolean }>(`/api/jobs/${id}/cancel`, { method: 'POST' }),
   media: (params: MediaQueryParams) => {
     const sp = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {

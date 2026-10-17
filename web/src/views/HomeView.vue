@@ -4,6 +4,7 @@ import { useMediaStore } from '../stores';
 import StatsBar from '../components/StatsBar.vue';
 import FilterBar from '../components/FilterBar.vue';
 import MediaGrid from '../components/MediaGrid.vue';
+import BoardCollector from '../components/BoardCollector.vue';
 
 const props = defineProps<{ fixedType?: string }>();
 const media = useMediaStore();
@@ -24,6 +25,7 @@ watch(() => props.fixedType, applyRoute);
 <template>
   <v-container fluid class="pa-4" style="max-width: 1400px">
     <StatsBar class="mb-4" />
+    <BoardCollector class="mb-4" />
     <FilterBar class="mb-4" />
     <MediaGrid />
   </v-container>

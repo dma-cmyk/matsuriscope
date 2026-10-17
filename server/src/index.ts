@@ -17,7 +17,7 @@ app.use((_req, res, next) => {
   res.setHeader('Referrer-Policy', 'no-referrer');
   res.setHeader(
     'Content-Security-Policy',
-    "default-src 'self'; img-src * data: blob:; media-src *; frame-src https://www.youtube-nocookie.com https://www.youtube.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'",
+    "default-src 'self'; img-src * data: blob:; media-src *; frame-src https://www.youtube-nocookie.com https://www.youtube.com https://platform.twitter.com; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'",
   );
   next();
 });
@@ -47,10 +47,17 @@ app.use('/api', api);
 
 // 本番: ビルド済みフロントを配信
 if (fs.existsSync(config.webDist)) {
-  app.use(express.static(config.webDist, { maxAge: '1h', index: 'index.html' }));
+  app.use(express.static(config.webDist, {
+    maxAge: '1h',
+    index: 'index.html',
+    setHeaders(res, file) {
+      if (path.extname(file) === '.html') res.setHeader('Cache-Control', 'no-cache');
+    },
+  }));
   // SPAフォールバック ( /api 以外 )
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/')) return next();
+    res.setHeader('Cache-Control', 'no-cache');
     res.sendFile(path.join(config.webDist, 'index.html'));
   });
 }

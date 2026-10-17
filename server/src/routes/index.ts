@@ -1,8 +1,11 @@
 import { Router, type Request, type Response } from 'express';
-import { db, getSetting, setSetting } from '../db.js';
+import { db, getSetting, setSetting, type BoardRow } from '../db.js';
 import { buzzScore } from '../score.js';
-import { isCollectRunning, runCollect } from '../collector/collect.js';
+import {
+  CollectStartError, isCollectRunning, refreshBoards, requestBoardCancellation, runCollect, startBoardCollect,
+} from '../collector/collect.js';
 import { config } from '../config.js';
+import { adapters } from '../adapters/index.js';
 
 export const api = Router();
 
@@ -13,14 +16,26 @@ const PERIOD_SECONDS: Record<string, number> = {
   '7d': 7 * 86400,
 };
 
-const VALID_TYPES = new Set(['all', 'image', 'gif', 'video', 'favorite']);
+const VALID_TYPES: Record<string, true> = { all: true, image: true, gif: true, video: true, twitter: true, favorite: true };
 const VALID_SORTS = new Set(['ikioi', 'new', 'res', 'buzz']);
 
+const JOB_SELECT = `SELECT j.*, b.name AS board_name,
+  CASE WHEN b.id IS NULL THEN NULL ELSE b.server || '/' || b.board_key END AS board_key
+  FROM collect_jobs j LEFT JOIN boards b ON b.id = j.board_id`;
+
+function collectionError(res: Response, error: unknown): void {
+  if (error instanceof CollectStartError) {
+    res.status(error.statusCode).json({ error: error.message });
+  } else {
+    console.error('[collection API]', error);
+    res.status(500).json({ error: 'collection request failed' });
+  }
+}
 /** GET /api/stats — ホーム上部の統計 */
 api.get('/stats', (_req, res) => {
   const count = (sql: string): number => Number((db.prepare(sql).get() as { c: number }).c);
   const lastJob = db
-    .prepare('SELECT * FROM collect_jobs ORDER BY id DESC LIMIT 1')
+    .prepare(`${JOB_SELECT} ORDER BY j.id DESC LIMIT 1`)
     .get() as Record<string, unknown> | undefined;
   res.json({
     threads: count('SELECT COUNT(*) AS c FROM threads'),
@@ -45,6 +60,17 @@ api.get('/boards', (_req, res) => {
   res.json({ items: rows });
 });
 
+/** Official menu only; can populate an empty database without starting a media job. */
+api.post('/boards/refresh', async (_req, res) => {
+  try {
+    await refreshBoards();
+    const items = db.prepare('SELECT id, server, board_key, name, category, enabled FROM boards ORDER BY category, name').all();
+    res.json({ items });
+  } catch (error) {
+    collectionError(res, error);
+  }
+});
+
 /** メディア一覧クエリ。occ/thread 情報をJOINして勢い等を返す */
 interface MediaQuery {
   type: string;
@@ -61,7 +87,7 @@ function parseMediaQuery(req: Request): MediaQuery {
   const rawLimit = Number(q['limit']);
   const rawPage = Number(q['page']);
   return {
-    type: VALID_TYPES.has(String(q['type'])) ? String(q['type']) : 'all',
+    type: Object.hasOwn(VALID_TYPES, String(q['type'])) ? String(q['type']) : 'all',
     board: typeof q['board'] === 'string' && q['board'] ? q['board'] : null,
     q: typeof q['q'] === 'string' && q['q'].trim() ? q['q'].trim().slice(0, 100) : null,
     period:
@@ -208,11 +234,26 @@ api.post('/collect', async (_req, res) => {
   res.status(202).json({ started: true });
 });
 
+api.post('/collect/board', (req, res) => {
+  const boardId: unknown = req.body?.boardId;
+  if (typeof boardId !== 'number' || !Number.isSafeInteger(boardId) || boardId <= 0) {
+    res.status(400).json({ error: 'boardId must be a positive integer' });
+    return;
+  }
+  try {
+    const { jobId, completion } = startBoardCollect(boardId);
+    void completion.catch((error) => console.error('[board collect]', error));
+    res.status(202).json({ started: true, jobId });
+  } catch (error) {
+    collectionError(res, error);
+  }
+});
+
 /** GET /api/jobs — 収集ログ */
 api.get('/jobs', (req, res) => {
   const rawLimit = Number(req.query['limit']);
   const limit = Number.isFinite(rawLimit) ? Math.min(50, Math.max(1, Math.floor(rawLimit))) : 10;
-  const jobs = db.prepare('SELECT * FROM collect_jobs ORDER BY id DESC LIMIT ?').all(limit);
+  const jobs = db.prepare(`${JOB_SELECT} ORDER BY j.id DESC LIMIT ?`).all(limit);
   const events = db
     .prepare(
       `SELECT e.* FROM job_events e
@@ -221,6 +262,35 @@ api.get('/jobs', (req, res) => {
     )
     .all(limit);
   res.json({ jobs, events });
+});
+
+api.get('/jobs/:id', (req, res) => {
+  const id = Number(req.params['id']);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    res.status(400).json({ error: 'invalid job id' });
+    return;
+  }
+  const job = db.prepare(`${JOB_SELECT} WHERE j.id = ?`).get(id);
+  if (!job) {
+    res.status(404).json({ error: 'job not found' });
+    return;
+  }
+  const events = db.prepare('SELECT * FROM job_events WHERE job_id = ? ORDER BY id DESC LIMIT 200').all(id);
+  res.json({ job, events });
+});
+
+api.post('/jobs/:id/cancel', (req, res) => {
+  const id = Number(req.params['id']);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    res.status(400).json({ error: 'invalid job id' });
+    return;
+  }
+  try {
+    requestBoardCancellation(id);
+    res.json({ cancelRequested: true });
+  } catch (error) {
+    collectionError(res, error);
+  }
 });
 
 /** GET /api/config / PUT /api/config — 設定 */
@@ -239,6 +309,16 @@ api.put('/config', (req: Request, res: Response) => {
   if (Array.isArray(body['boardsEnabled'])) {
     const keys = (body['boardsEnabled'] as unknown[]).filter((k): k is string => typeof k === 'string');
     setSetting('boards_enabled_json', JSON.stringify(keys));
+    const enabledKeys = new Set(keys);
+    const boards = db.prepare('SELECT * FROM boards').all() as unknown as BoardRow[];
+    const update = db.prepare('UPDATE boards SET enabled = ? WHERE id = ?');
+    for (const board of boards) {
+      const adapter = adapters.find((candidate) => candidate.sourceId === board.source_id);
+      const eligible = adapter?.isBoardEligible({
+        server: board.server, boardKey: board.board_key, name: board.name, category: board.category, url: board.url,
+      });
+      update.run(eligible && enabledKeys.has(`${board.server}/${board.board_key}`) ? 1 : 0, board.id);
+    }
   }
   res.json({ ok: true });
 });

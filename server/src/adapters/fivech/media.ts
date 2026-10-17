@@ -70,10 +70,12 @@ const TWITTER_HOSTS: Record<string, true> = {
 
 function twitterStatus(url: URL): { user: string; id: string } | null {
   const host = url.hostname.toLowerCase();
-  if (!TWITTER_HOSTS[host]) return null;
-  const m = /^\/([\w]+)\/status(?:es)?\/(\d+)/.exec(url.pathname);
+  if (TWITTER_HOSTS[host] !== true || url.username || url.password || url.port) return null;
+  // Match the entire status path, not a numeric prefix or a spoofed suffix.
+  // The frontend validates the same boundary independently (x-media.test.ts).
+  const m = /^\/(?:([a-zA-Z0-9_]{1,15})\/status(?:es)?|i\/web\/status)\/([1-9]\d{0,19})(?:\/(?:photo|video)\/[1-4])?\/?$/.exec(url.pathname);
   if (!m) return null;
-  return { user: m[1]!, id: m[2]! };
+  return { user: m[1] ?? 'i/web', id: m[2]! };
 }
 
 function classify(url: URL): { type: MediaType; previewable: boolean } | null {
@@ -83,7 +85,7 @@ function classify(url: URL): { type: MediaType; previewable: boolean } | null {
   if (yt) return { type: 'youtube', previewable: true };
 
   const tw = twitterStatus(url);
-  if (tw) return { type: 'twitter', previewable: false };
+  if (tw) return { type: 'twitter', previewable: true };
 
   // Twitter メディア直リンク
   if (host === 'video.twimg.com') return { type: 'video', previewable: true };

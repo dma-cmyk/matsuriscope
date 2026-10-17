@@ -45,6 +45,12 @@ export interface SourceAdapter {
   /** 収集対象の板一覧を返す (収集可否の絞り込みはアダプタの責務) */
   listBoards(): Promise<SourceBoard[]>;
 
+  /** DB由来の板も取得前に、収集元のURL・カテゴリ許可規則で検証する。 */
+  isBoardEligible(board: SourceBoard): boolean;
+
+  /** 現行一覧を一度だけ取得する。勢い・レス数・hotジョブ上限による切り捨てはしない。 */
+  listBoardThreads(board: SourceBoard): Promise<SourceThreadRef[]>;
+
   /** 注目スレッド参照の一覧 (勢い上位など) を返す */
   listHotThreads(boards: SourceBoard[]): Promise<SourceThreadRef[]>;
 

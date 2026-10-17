@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useDisplay } from 'vuetify';
+import { ApiError } from './api';
 import { useMediaStore, useMetaStore } from './stores';
+import TutorialDialog from './components/TutorialDialog.vue';
 
 const media = useMediaStore();
 const meta = useMetaStore();
@@ -11,10 +13,12 @@ const router = useRouter();
 const display = useDisplay();
 const isMobile = computed(() => display.smAndDown.value);
 const drawer = ref(false);
+const tutorial = ref<InstanceType<typeof TutorialDialog> | null>(null);
 
-const searchText = ref('');
+const searchText = ref(media.keyword);
+watch(() => media.keyword, (value) => { searchText.value = value; });
 function applySearch() {
-  media.setFilter({ keyword: searchText.value });
+  media.setFilter({ keyword: searchText.value ?? '' });
 }
 
 const tab = computed({
@@ -25,35 +29,54 @@ const tab = computed({
   },
 });
 
-onMounted(() => {
-  void meta.refreshStats();
-  void meta.refreshBoards();
+const collectMessage = ref('');
+const collectFailed = ref(false);
+let statsTimer: ReturnType<typeof setTimeout> | undefined;
+let disposed = false;
+
+async function refreshStatus() {
+  if (disposed) return;
+  clearTimeout(statsTimer);
+  try {
+    await meta.refreshStats();
+  } catch {
+    // The shared statsError is displayed below; keep observing recovery and scheduled jobs.
+  } finally {
+    clearTimeout(statsTimer);
+    if (!disposed) statsTimer = setTimeout(() => { void refreshStatus(); }, 3000);
+  }
+}
+
+watch(() => meta.stats?.lastJob, (current, previous) => {
+  if (current?.scope === 'hot' && current.status !== 'running' && previous
+    && (current.id !== previous.id || previous.status === 'running')) void media.refresh();
 });
 
-let statsTimer: NodeJS.Timeout | undefined;
+onMounted(() => {
+  void refreshStatus();
+  void meta.refreshBoards();
+});
+onBeforeUnmount(() => {
+  disposed = true;
+  clearTimeout(statsTimer);
+});
+
 async function onCollect() {
+  if (!meta.stats || meta.statsError || meta.collecting || meta.stats.jobRunning) return;
+  collectMessage.value = '';
+  collectFailed.value = false;
   try {
     await meta.triggerCollect();
-  } catch {
-    return; // 409 (収集中) 等は無視
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409) {
+      collectMessage.value = '別の収集または板一覧の更新が始まりました。完了後にもう一度操作してください。';
+    } else {
+      collectFailed.value = true;
+      collectMessage.value = `収集を開始できませんでした。${(error as Error).message}`;
+    }
+  } finally {
+    await refreshStatus();
   }
-  // 収集中は5秒ごとに統計をポーリング (失敗6回 or 完了で停止)
-  clearInterval(statsTimer);
-  let failures = 0;
-  statsTimer = setInterval(() => {
-    void (async () => {
-      try {
-        await meta.refreshStats();
-        failures = 0;
-        if (!meta.stats?.jobRunning) {
-          clearInterval(statsTimer);
-          void media.refresh(); // 新着メディアを反映
-        }
-      } catch {
-        if (++failures >= 6) clearInterval(statsTimer);
-      }
-    })();
-  }, 5000);
 }
 </script>
 
@@ -68,6 +91,8 @@ async function onCollect() {
       <v-text-field
         v-if="!isMobile"
         v-model="searchText"
+        data-tour="search"
+        aria-label="キーワード検索"
         class="mx-6 search-field"
         density="compact"
         variant="outlined"
@@ -76,14 +101,24 @@ async function onCollect() {
         hide-details
         clearable
         @keyup.enter="applySearch"
-        @click:clear="applySearch"
+        @click:clear="media.setFilter({ keyword: '' })"
       />
       <v-spacer />
+      <v-btn
+        icon="mdi-help-circle-outline"
+        variant="text"
+        size="small"
+        aria-label="使い方を見る"
+        title="使い方を見る"
+        @click="tutorial?.open()"
+      />
       <v-btn
         color="primary"
         variant="tonal"
         size="small"
+        data-tour="collect"
         :loading="meta.collecting || (meta.stats?.jobRunning ?? false)"
+        :disabled="!meta.stats || !!meta.statsError"
         prepend-icon="mdi-refresh"
         @click="onCollect"
       >
@@ -91,7 +126,7 @@ async function onCollect() {
       </v-btn>
     </v-app-bar>
 
-    <v-navigation-drawer v-model="drawer" :permanent="!isMobile" color="surface" width="220">
+    <v-navigation-drawer :model-value="drawer || !isMobile" :permanent="!isMobile" color="surface" width="220" @update:model-value="drawer = $event">
       <v-list nav density="compact">
         <v-list-item
           prepend-icon="mdi-home"
@@ -102,10 +137,16 @@ async function onCollect() {
         />
         <v-list-item
           prepend-icon="mdi-star"
+          data-tour="favorites"
           title="お気に入り"
           :active="tab === 'favorites'"
           active-color="primary"
           @click="tab = 'favorites'"
+        />
+        <v-list-item
+          prepend-icon="mdi-help-circle-outline"
+          title="使い方を見る"
+          @click="drawer = false; tutorial?.open()"
         />
       </v-list>
       <v-divider class="my-2" />
@@ -119,15 +160,21 @@ async function onCollect() {
     </v-navigation-drawer>
 
     <v-main>
+      <v-alert v-if="meta.statsError" type="warning" variant="tonal" density="compact" class="ma-4" role="alert">
+        {{ meta.statsError }} 最新の状態を確認できるまで収集操作を停止しています。
+        <v-btn variant="text" size="small" @click="refreshStatus">状況を再読み込み</v-btn>
+      </v-alert>
       <router-view />
+      <TutorialDialog ref="tutorial" @started="drawer = false" />
     </v-main>
+    <v-snackbar :model-value="!!collectMessage" :color="collectFailed ? 'error' : 'info'" @update:model-value="collectMessage = $event ? collectMessage : ''">{{ collectMessage }}</v-snackbar>
 
     <v-bottom-navigation v-if="isMobile" color="primary" grow>
       <v-btn value="home" :active="tab === 'home'" @click="tab = 'home'">
         <v-icon>mdi-home</v-icon>
         <span>ホーム</span>
       </v-btn>
-      <v-btn value="favorites" :active="tab === 'favorites'" @click="tab = 'favorites'">
+      <v-btn value="favorites" data-tour="favorites" :active="tab === 'favorites'" @click="tab = 'favorites'">
         <v-icon>mdi-star</v-icon>
         <span>お気に入り</span>
       </v-btn>

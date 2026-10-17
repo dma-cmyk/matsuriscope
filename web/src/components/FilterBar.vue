@@ -1,19 +1,25 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useDisplay } from 'vuetify';
 import { useMediaStore, useMetaStore, type PeriodKey, type SortKey, type TypeFilter } from '../stores';
+import { useTutorialStore } from '../tutorial';
 
 const media = useMediaStore();
 const meta = useMetaStore();
+const tutorial = useTutorialStore();
 const display = useDisplay();
 const isMobile = computed(() => display.smAndDown.value);
 const showFilters = ref(false);
+const advancedFiltersVisible = computed(
+  () => !isMobile.value || showFilters.value || (tutorial.running && tutorial.stepId === 'sort'),
+);
 
 const typeChips: { value: TypeFilter; label: string }[] = [
   { value: 'all', label: 'すべて' },
   { value: 'image', label: '画像' },
   { value: 'video', label: '動画' },
   { value: 'gif', label: 'GIF' },
+  { value: 'twitter', label: 'X投稿' },
   { value: 'favorite', label: 'お気に入り' },
 ];
 
@@ -39,12 +45,16 @@ const boardItems = computed(() => [
 ]);
 
 const searchLocal = ref(media.keyword);
+watch(() => media.keyword, (keyword) => {
+  searchLocal.value = keyword;
+});
 </script>
 
 <template>
   <div class="filter-bar">
     <div class="d-flex align-center flex-wrap ga-2">
       <v-chip-group
+        data-tour="types"
         :model-value="media.typeFilter"
         mandatory
         selected-class="chip-active"
@@ -60,11 +70,13 @@ const searchLocal = ref(media.keyword);
         size="small"
         variant="tonal"
         icon="mdi-tune"
+        aria-label="絞り込み条件を開く"
         @click="showFilters = !showFilters"
       />
-      <template v-if="!isMobile || showFilters">
+      <div v-if="advancedFiltersVisible" data-tour="sort" class="sort-controls d-flex align-center flex-wrap ga-2">
         <v-select
           :model-value="media.sort"
+          aria-label="並び順"
           :items="sortItems"
           item-title="label"
           item-value="value"
@@ -77,6 +89,7 @@ const searchLocal = ref(media.keyword);
         />
         <v-select
           :model-value="media.board"
+          aria-label="表示する板"
           :items="boardItems"
           item-title="label"
           item-value="value"
@@ -88,6 +101,7 @@ const searchLocal = ref(media.keyword);
         />
         <v-select
           :model-value="media.period"
+          aria-label="期間"
           :items="periodItems"
           item-title="label"
           item-value="value"
@@ -97,10 +111,12 @@ const searchLocal = ref(media.keyword);
           class="select-period"
           @update:model-value="(v) => media.setFilter({ period: v as PeriodKey })"
         />
-      </template>
+      </div>
       <v-text-field
         v-if="isMobile"
         v-model="searchLocal"
+        data-tour="search"
+        aria-label="キーワード検索"
         density="compact"
         variant="outlined"
         placeholder="検索..."
@@ -116,6 +132,9 @@ const searchLocal = ref(media.keyword);
 </template>
 
 <style scoped>
+.sort-controls {
+  flex: 0 1 446px;
+}
 .select-sort {
   max-width: 150px;
 }

@@ -117,7 +117,6 @@ describe('extractMediaFromPost', () => {
     const b = extractMediaFromPost(post('https://x.com/foo/status/1234567890/photo/1'));
     expect(a[0]!.type).toBe('twitter');
     expect(a[0]!.canonicalUrl).toBe(b[0]!.canonicalUrl);
-    expect(a[0]!.previewable).toBe(false);
   });
 
   it('imgur裸リンクは other (プレビュー不可) にする', () => {
